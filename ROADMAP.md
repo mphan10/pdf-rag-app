@@ -8,43 +8,8 @@ Reviewers look past "it works" for three things:
 2. You make **production tradeoffs** deliberately, and can explain them.
 3. You can **demo and communicate** the system clearly.
 
-**Suggested order:** Phase 0 → bugs + citations → evals → hygiene (compose + CI) → deploy + demo.
+**Suggested order:** bugs + citations → evals → hygiene (compose + CI) → deploy + demo.
 **If short on time:** evals + live demo carry the most weight.
-
----
-
-## Phase 0: Repo setup (do first)
-
-The first commit (`9ed0580`) includes `.env` (API keys) and `qdrant_storage/` (~230 MB of DB files). Nothing has been pushed yet, so fix the commit before adding a remote.
-
-- [x] Add secrets and local data to `.gitignore`
-  ```bash
-  printf '\n# Secrets and local data\n.env\nqdrant_storage/\nuploads/\n' >> .gitignore
-  ```
-- [x] Remove them from the commit (files stay on disk)
-  ```bash
-  git rm -r --cached .env qdrant_storage
-  ```
-  ```bash
-  git add .gitignore && git commit --amend --no-edit
-  ```
-- [x] Verify they're gone (should print nothing)
-  ```bash
-  git show --stat HEAD | grep -E '\.env|qdrant'
-  ```
-- [x] Add a `.env.example` with placeholder keys (`OPENAI_API_KEY=`, `CLAUDE_API_KEY=`)
-- [x] Create an empty repo at https://github.com/new (no README / .gitignore / license)
-- [x] Connect and push
-  ```bash
-  git remote add origin https://github.com/<your-username>/PDF-AI-RAG-App.git
-  ```
-  ```bash
-  git branch -M main
-  ```
-  ```bash
-  git push -u origin main
-  ```
-- [x] Replace the placeholder `description` in `pyproject.toml`
 
 ---
 
@@ -143,5 +108,5 @@ Inngest is a good fit for **ingestion** (slow, can fail partway, needs retries).
 
 | Date | Change | Notes |
 | --- | --- | --- |
-| 2026-10-20 | README with architecture diagrams | Initial commit `9ed0580` |
+| 2026-10-20 | README with architecture diagrams | Initial commit `a1f9ef3` |
 | | | |
