@@ -1,7 +1,7 @@
 [project]
 name = "pdf-ai-rag-app"
 version = "0.1.0"
-description = "Add your description here"
+description = "PDF question answering with RAG: LlamaIndex chunking, OpenAI embeddings, Qdrant vector search, Inngest workflows and a Streamlit UI."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
