@@ -1,5 +1,7 @@
 from qdrant_client import QdrantClient
-from qdrant_client.models import VectorParams, Distance, PointStruct
+from qdrant_client.models import (
+    VectorParams, Distance, PointStruct, Filter, FieldCondition, MatchValue, FilterSelector
+)
 
 class QdrantStorage:
     def __init__(self, url="http://localhost:6333", collection="docs", dim=3072):
@@ -10,6 +12,27 @@ class QdrantStorage:
                 collection_name=self.collection,
                 vectors_config=VectorParams(size=dim, distance=Distance.COSINE)
             )
+
+    def has_content(self, source: str, content_hash: str) -> bool:
+        """True if this exact file version is already stored under `source`."""
+        result = self.client.count(
+            collection_name=self.collection,
+            count_filter=Filter(must=[
+                FieldCondition(key="source", match=MatchValue(value=source)),
+                FieldCondition(key="content_hash", match=MatchValue(value=content_hash)),
+            ]),
+            exact=True
+        )
+        return result.count > 0
+
+    def delete_source(self, source: str):
+        self.client.delete(
+            collection_name=self.collection,
+            points_selector=FilterSelector(
+                filter=Filter(must=[FieldCondition(key="source", match=MatchValue(value=source))])
+            ),
+            wait=True
+        )
 
     def upsert(self, ids, vectors, payloads):
         points = [PointStruct(id=ids[i], vector=vectors[i], payload=payloads[i]) for i in range(len(ids))]

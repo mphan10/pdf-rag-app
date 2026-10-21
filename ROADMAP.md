@@ -15,10 +15,10 @@ Reviewers look past "it works" for three things:
 
 ## Phase 1: Fix real bugs
 
-- [ ] **Batch embeddings.** `embed_texts` sends every chunk in one OpenAI request (`data_loader.py`), so large PDFs fail. Batch them (~100 inputs per request) and add retry/backoff.
-- [ ] **Stale chunks on re-ingest.** Re-ingesting a PDF that now has fewer chunks leaves the old extra chunks in Qdrant. Add delete-by-`source` to `QdrantStorage` and call it before upsert.
-- [ ] **Silent rate limit.** Re-uploading the same filename within 4 hours is dropped by Inngest, but the UI still says "success". Show the user what actually happened.
-- [ ] **Unsafe uploads.** `save_uploaded_pdf` writes `uploads/<file.name>` without sanitizing it. That allows collisions and path traversal. Use `Path(name).name`, restrict to safe characters, and avoid overwrites.
+- [x] **Batch embeddings.** `embed_texts` sends every chunk in one OpenAI request (`data_loader.py`), so large PDFs fail. Batch them (~100 inputs per request) and add retry/backoff.
+- [x] **Stale chunks on re-ingest.** Re-ingesting a PDF that now has fewer chunks leaves the old extra chunks in Qdrant. Add delete-by-`source` to `QdrantStorage` and call it before upsert.
+- [x] **Silent rate limit.** Re-uploading the same filename within 4 hours is dropped by Inngest, but the UI still says "success". Show the user what actually happened.
+- [x] **Unsafe uploads.** `save_uploaded_pdf` writes `uploads/<file.name>` without sanitizing it. That allows collisions and path traversal. Use `Path(name).name`, restrict to safe characters, and avoid overwrites.
 - [ ] **Typing.** `RAGChunkAndSrc.source_id: str = None` should be `str | None = None`.
 - [ ] **Client reuse.** `QdrantStorage()` creates a new client on every call. Cache one instance.
 - [ ] **Hard-coded URLs.** Read the Qdrant URL and other endpoints from env instead of `localhost`.
@@ -109,4 +109,5 @@ Inngest is a good fit for **ingestion** (slow, can fail partway, needs retries).
 | Date | Change | Notes |
 | --- | --- | --- |
 | 2026-10-20 | README with architecture diagrams | Initial commit `a1f9ef3` |
+| 2026-10-20 | Phase 1: first 4 bug fixes | Batched embeddings, stale-chunk cleanup, explicit skip for unchanged files (replaced the never-registered rate limit; fixed `Throttle(count=)` → `limit=`), sanitized uploads, `send_sync` fix for "Event loop is closed" |
 | | | |

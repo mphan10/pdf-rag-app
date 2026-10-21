@@ -2,7 +2,7 @@
 
 Upload PDFs and ask questions about them. The app is a small Retrieval-Augmented Generation (RAG) pipeline: it splits your PDFs into chunks, embeds them with OpenAI, stores the vectors in Qdrant, and answers questions with `gpt-4o-mini` using the most relevant chunks as context.
 
-[Inngest](https://www.inngest.com/) runs both the ingestion and the query pipelines as durable, step-based functions. That gives you retries, throttling, rate limiting and a local dashboard where you can watch every run.
+[Inngest](https://www.inngest.com/) runs both the ingestion and the query pipelines as durable, step-based functions. That gives you retries, throttling and a local dashboard where you can watch every run.
 
 ---
 
@@ -77,14 +77,24 @@ sequenceDiagram
     participant Q as Qdrant
 
     U->>S: Upload PDF
-    S->>S: Save file to uploads/
+    S->>S: Save to uploads/{hash}_{safe_name}.pdf
     S->>I: send rag/ingest_pdf {pdf_path, source_id}
-    I->>F: Invoke function (throttled / rate-limited)
-    F->>F: step "load-and-chunk"<br/>PDFReader → SentenceSplitter(1000, 200)
-    F->>O: step "embed-and-upsert": embed chunks
-    O-->>F: 3072-d vectors
-    F->>Q: upsert points (uuid5(source_id:i), vector, {source, text})
-    F-->>I: {ingested: N}
+    I->>F: Invoke function (throttled)
+    F->>F: step "load-and-chunk"<br/>sha256 file → PDFReader → SentenceSplitter(1000, 200)
+    F->>Q: step "embed-and-upsert": same source + hash stored?
+    alt unchanged file
+        F-->>I: {ingested: 0, skipped: true}
+    else new or updated file
+        F->>O: embed chunks in batches of 100
+        O-->>F: 3072-d vectors
+        F->>Q: delete old points for source_id
+        F->>Q: upsert points (uuid5(source_id:i), vector, {source, content_hash, text})
+        F-->>I: {ingested: N, skipped: false}
+    end
+    loop every 0.5s, up to 300s
+        S->>I: GET /v1/events/{event_id}/runs
+    end
+    S-->>U: Ingested N chunks / Skipped (unchanged)
 ```
 
 ### Query flow
@@ -122,10 +132,10 @@ sequenceDiagram
 | File | Role |
 | --- | --- |
 | [main.py](main.py) | FastAPI app that serves the two Inngest functions at `/api/inngest`. |
-| [data_loader.py](data_loader.py) | Loads PDFs with LlamaIndex `PDFReader`, splits them with `SentenceSplitter` (1000-token chunks, 200 overlap), and embeds text with OpenAI `text-embedding-3-large` (3072 dims). |
+| [data_loader.py](data_loader.py) | Loads PDFs with LlamaIndex `PDFReader`, splits them with `SentenceSplitter` (1000-token chunks, 200 overlap), and embeds text with OpenAI `text-embedding-3-large` (3072 dims) in batches of 100, with SDK retries on rate-limit and server errors. |
 | [vector_db.py](vector_db.py) | `QdrantStorage` wrapper. Creates the `docs` collection on first use (3072-d, cosine), upserts points, and runs top-k search returning `contexts` and de-duplicated `sources`. |
 | [custom_types.py](custom_types.py) | Pydantic models passed between Inngest steps: `RAGChunkAndSrc`, `RAGUpsertResult`, `RAGSearchResult`, `RAGQueryResult`. |
-| [streamlit_app.py](streamlit_app.py) | Web UI. Saves uploads to `uploads/`, sends Inngest events, and polls the Inngest REST API for query results. |
+| [streamlit_app.py](streamlit_app.py) | Web UI. Saves uploads to `uploads/` under a sanitized, content-hashed name, sends Inngest events, and polls the Inngest REST API to show ingestion and query results. |
 | `qdrant_storage/` | Qdrant's on-disk data, mounted into the Qdrant Docker container. |
 
 ### Inngest functions
@@ -135,9 +145,11 @@ sequenceDiagram
 - Event data: `pdf_path` (absolute path, required) and `source_id` (optional, defaults to `pdf_path`).
 - Steps: `load-and-chunk`, then `embed-and-upsert`.
 - Throttle: at most 2 runs per minute across the app.
-- Rate limit: 1 run per `source_id` every 4 hours. Re-uploading the same filename inside that window is skipped.
-- Point IDs are `uuid5(NAMESPACE_URL, "{source_id}:{chunk_index}")`, so re-ingesting a file overwrites its chunks instead of duplicating them. If the new version has fewer chunks, the extra old chunks stay in the collection.
-- Returns `{"ingested": <chunk count>}`.
+- `source_id` identifies a document. Uploading a file with the same name replaces that document.
+- Skips unchanged files: each point stores the file's SHA-256 `content_hash`. If the same `source_id` and hash are already stored, the run returns `skipped: true` without calling OpenAI.
+- On a new or changed file, all of the document's old points are deleted before the new ones are upserted, so a shorter version leaves no stale chunks.
+- Point IDs are `uuid5(NAMESPACE_URL, "{source_id}:{chunk_index}")`, so a retried step overwrites points instead of duplicating them.
+- Returns `{"ingested": <chunk count>, "skipped": <bool>}`.
 
 **`RAG: Query PDF`**, triggered by `rag/query_pdf_ai`
 
@@ -236,7 +248,7 @@ You can also trigger functions directly from the Inngest dashboard by sending a 
 | Qdrant URL / collection | `vector_db.py` | `http://localhost:6333` / `docs` |
 | Chat model | `main.py` | `gpt-4o-mini` |
 | Ingest throttle | `main.py` | 2 runs per minute |
-| Ingest rate limit | `main.py` | 1 per `source_id` per 4 h |
+| Embedding batch size | `data_loader.py` | 100 inputs per request |
 | Inngest API base | env `INNGEST_API_BASE` | `http://127.0.0.1:8288/v1` |
 | Query poll timeout | `streamlit_app.py` | 120 s, every 0.5 s |
 
@@ -266,6 +278,6 @@ PDF-AI-RAG-App/
 
 - **Local only.** The Inngest client runs with `is_production=False`, Qdrant is hard-coded to `localhost:6333`, and the Streamlit poller talks to the Dev Server API.
 - **Shared filesystem.** The ingest function reads the PDF from the path Streamlit saved it to, so the UI and the API must run on the same machine.
-- **Embedding batch size.** All chunks of a PDF are embedded in a single OpenAI request. Very large PDFs can exceed the per-request input limit.
-- **Silent rate limiting.** Re-uploading a file with the same name within 4 hours is dropped by the rate limit, and the UI still shows a success message.
+- **Same name, same document.** Two different PDFs uploaded with the same file name replace each other in the index (their saved files don't collide, because the file name on disk includes a content hash).
+- **Slow result polling.** The Inngest Dev Server caches `/v1/events/{id}/runs` responses for about 15 seconds, so the UI can take that long to show a finished run.
 - **Unused pieces.** `anthropic` is a dependency and `CLAUDE_API_KEY` is in `.env`, but neither is used yet. `RAGQueryResult` is defined but not used.

@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 import uuid
 import os
 import datetime
+import hashlib
 from data_loader import load_and_chunk_pdf, embed_texts
 from vector_db import QdrantStorage
 from custom_types import RAGQueryResult, RAGSearchResult, RAGUpsertResult, RAGChunkAndSrc
@@ -23,30 +24,38 @@ inngest_client = inngest.Inngest(
 @inngest_client.create_function(
     fn_id="RAG: Ingest PDF",
     trigger=inngest.TriggerEvent(event="rag/ingest_pdf"),
+    # Unchanged re-uploads are skipped inside the function (see _upsert) rather than with an
+    # Inngest rate limit, which drops events silently and would also block updated files
     throttle=inngest.Throttle(
-        count=2, 
+        limit=2,
         period=datetime.timedelta(minutes=1)
-    ),
-    rate_limit=inngest.RateLimit(
-        limit=1,
-        period=datetime.timedelta(hours=4),
-        key="event.data.source_id"
     )
 )
 async def rag_ingest_pdf(ctx: inngest.Context):
     def _load(ctx: inngest.Context) -> RAGChunkAndSrc:
         pdf_path = ctx.event.data["pdf_path"]
         source_id = ctx.event.data.get("source_id", pdf_path)
+        with open(pdf_path, "rb") as f:
+            content_hash = hashlib.sha256(f.read()).hexdigest()
         chunks = load_and_chunk_pdf(pdf_path)
-        return RAGChunkAndSrc(chunks=chunks, source_id=source_id)
+        return RAGChunkAndSrc(chunks=chunks, source_id=source_id, content_hash=content_hash)
 
     def _upsert(chunks_and_src: RAGChunkAndSrc) -> RAGUpsertResult:
         chunks = chunks_and_src.chunks
         source_id = chunks_and_src.source_id
+        store = QdrantStorage()
+        if store.has_content(source_id, chunks_and_src.content_hash):
+            return RAGUpsertResult(ingested=0, skipped=True)
         vecs = embed_texts(chunks)
         ids = [str(uuid.uuid5(uuid.NAMESPACE_URL, name=f"{source_id}:{i}")) for i in range(len(chunks))]
-        payloads = [{"source": source_id, "text": chunks[i]} for i in range(len(chunks))]
-        QdrantStorage().upsert(ids, vecs, payloads)
+        payloads = [
+            {"source": source_id, "content_hash": chunks_and_src.content_hash, "text": chunks[i]}
+            for i in range(len(chunks))
+        ]
+        # Replace the document's previous chunks so a shorter re-upload leaves no stale ones.
+        # Embeddings are computed first so the delete-to-upsert gap stays short.
+        store.delete_source(source_id)
+        store.upsert(ids, vecs, payloads)
         return RAGUpsertResult(ingested=len(chunks))
 
     chunks_and_src = await ctx.step.run("load-and-chunk", lambda: _load(ctx), output_type=RAGChunkAndSrc)
