@@ -9,7 +9,7 @@ import os
 import datetime
 import hashlib
 from data_loader import load_and_chunk_pdf, embed_texts
-from vector_db import QdrantStorage
+from vector_db import get_storage
 from custom_types import RAGQueryResult, RAGSearchResult, RAGUpsertResult, RAGChunkAndSrc
 
 load_dotenv()
@@ -43,7 +43,7 @@ async def rag_ingest_pdf(ctx: inngest.Context):
     def _upsert(chunks_and_src: RAGChunkAndSrc) -> RAGUpsertResult:
         chunks = chunks_and_src.chunks
         source_id = chunks_and_src.source_id
-        store = QdrantStorage()
+        store = get_storage()
         if store.has_content(source_id, chunks_and_src.content_hash):
             return RAGUpsertResult(ingested=0, skipped=True)
         vecs = embed_texts(chunks)
@@ -70,7 +70,7 @@ async def rag_ingest_pdf(ctx: inngest.Context):
 async def rag_query_pdf_ai(ctx: inngest.Context):
     def _search(question: str, top_k: int = 5) -> RAGSearchResult:
         query_vec = embed_texts([question])[0]
-        store = QdrantStorage()
+        store = get_storage()
         found = store.search(query_vec, top_k)
         return RAGSearchResult(context=found["contexts"], sources=found["sources"])
 
@@ -106,7 +106,7 @@ async def rag_query_pdf_ai(ctx: inngest.Context):
     )
 
     answer = res["choices"][0]["message"]["content"].strip()
-    return {"answer": answer, "sources": found.sources, "num_contexts": len(found.context)}
+    return RAGQueryResult(answer=answer, sources=found.sources, num_contexts=len(found.context)).model_dump()
 
 app = FastAPI()
 

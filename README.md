@@ -133,7 +133,7 @@ sequenceDiagram
 | --- | --- |
 | [main.py](main.py) | FastAPI app that serves the two Inngest functions at `/api/inngest`. |
 | [data_loader.py](data_loader.py) | Loads PDFs with LlamaIndex `PDFReader`, splits them with `SentenceSplitter` (1000-token chunks, 200 overlap), and embeds text with OpenAI `text-embedding-3-large` (3072 dims) in batches of 100, with SDK retries on rate-limit and server errors. |
-| [vector_db.py](vector_db.py) | `QdrantStorage` wrapper. Creates the `docs` collection on first use (3072-d, cosine), upserts points, and runs top-k search returning `contexts` and de-duplicated `sources`. |
+| [vector_db.py](vector_db.py) | `QdrantStorage` wrapper. Connects to `QDRANT_URL`, creates the `docs` collection on first use (3072-d, cosine), upserts and deletes points, and runs top-k search returning `contexts` and de-duplicated `sources`. `get_storage()` returns one shared instance so every step reuses the same client. |
 | [custom_types.py](custom_types.py) | Pydantic models passed between Inngest steps: `RAGChunkAndSrc`, `RAGUpsertResult`, `RAGSearchResult`, `RAGQueryResult`. |
 | [streamlit_app.py](streamlit_app.py) | Web UI. Saves uploads to `uploads/` under a sanitized, content-hashed name, sends Inngest events, and polls the Inngest REST API to show ingestion and query results. |
 | `qdrant_storage/` | Qdrant's on-disk data, mounted into the Qdrant Docker container. |
@@ -189,12 +189,15 @@ uv sync
 
 ### 2. Configure environment
 
-Create a `.env` file in the project root:
+Copy `.env.example` to `.env` and fill in your key:
 
 ```env
 OPENAI_API_KEY=sk-...
 # Optional: override the Inngest Dev Server API used by the Streamlit poller
 # INNGEST_API_BASE=http://127.0.0.1:8288/v1
+# Optional: Qdrant location (defaults to a local container); API key only for Qdrant Cloud
+# QDRANT_URL=http://localhost:6333
+# QDRANT_API_KEY=
 ```
 
 ### 3. Start the services
@@ -245,7 +248,9 @@ You can also trigger functions directly from the Inngest dashboard by sending a 
 | --- | --- | --- |
 | Embedding model / dimension | `data_loader.py` | `text-embedding-3-large` / 3072 |
 | Chunk size / overlap | `data_loader.py` | 1000 / 200 |
-| Qdrant URL / collection | `vector_db.py` | `http://localhost:6333` / `docs` |
+| Qdrant URL | env `QDRANT_URL` | `http://localhost:6333` |
+| Qdrant API key (Qdrant Cloud only) | env `QDRANT_API_KEY` | unset |
+| Qdrant collection | `vector_db.py` | `docs` |
 | Chat model | `main.py` | `gpt-4o-mini` |
 | Ingest throttle | `main.py` | 2 runs per minute |
 | Embedding batch size | `data_loader.py` | 100 inputs per request |
@@ -276,8 +281,8 @@ PDF-AI-RAG-App/
 
 ## Known limitations
 
-- **Local only.** The Inngest client runs with `is_production=False`, Qdrant is hard-coded to `localhost:6333`, and the Streamlit poller talks to the Dev Server API.
+- **Local only.** The Inngest client runs with `is_production=False`, and the Streamlit poller talks to the Dev Server API.
 - **Shared filesystem.** The ingest function reads the PDF from the path Streamlit saved it to, so the UI and the API must run on the same machine.
 - **Same name, same document.** Two different PDFs uploaded with the same file name replace each other in the index (their saved files don't collide, because the file name on disk includes a content hash).
 - **Slow result polling.** The Inngest Dev Server caches `/v1/events/{id}/runs` responses for about 15 seconds, so the UI can take that long to show a finished run.
-- **Unused pieces.** `anthropic` is a dependency and `CLAUDE_API_KEY` is in `.env`, but neither is used yet. `RAGQueryResult` is defined but not used.
+- **Unused pieces.** `anthropic` is a dependency and `CLAUDE_API_KEY` is in `.env`, but neither is used yet.
